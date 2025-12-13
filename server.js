@@ -29,8 +29,7 @@ app.use(helmet({
 // Security: CORS - Restrict to specific origins
 const allowedOrigins = [
   process.env.FRONTEND_URL || 'http://localhost:3000',
-  'https://sri-lalith-enterprises.vercel.app',
-  'https://sri-lalith-enterprises.netlify.app',
+  'https://srija0770-sri-lalith-enterprises.netlify.app', // Actual Netlify deployment URL
   // Add your production frontend URL here
 ];
 
@@ -42,8 +41,13 @@ app.use(cors({
     if (allowedOrigins.indexOf(origin) !== -1) {
       callback(null, true);
     } else {
+      // Log the origin for debugging
+      console.log('CORS: Request from origin:', origin);
+      console.log('CORS: Allowed origins:', allowedOrigins);
+      
       // In production, reject unknown origins
       if (process.env.NODE_ENV === 'production') {
+        console.error('CORS: Blocked request from:', origin);
         callback(new Error('Not allowed by CORS'));
       } else {
         // In development, allow all origins
@@ -52,8 +56,11 @@ app.use(cors({
     }
   },
   credentials: true,
-  methods: ['GET', 'POST', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+  exposedHeaders: ['Content-Length', 'X-Foo', 'X-Bar'],
+  preflightContinue: false,
+  optionsSuccessStatus: 204
 }));
 
 // Security: Rate limiting to prevent abuse
