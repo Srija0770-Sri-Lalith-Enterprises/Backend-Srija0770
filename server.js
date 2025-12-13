@@ -65,14 +65,20 @@ const createTransporter = () => {
 // Get owner email from environment variable
 const OWNER_EMAIL = process.env.OWNER_EMAIL || 'mundrusaisrija@gmail.com';
 
-// Check SMTP configuration on startup
-const checkSMTPConfig = () => {
+// Check Email configuration on startup
+const checkEmailConfig = () => {
+  const hasResendKey = !!process.env.RESEND_API_KEY;
   const hasSMTPUser = !!process.env.SMTP_USER;
   const hasSMTPPass = !!process.env.SMTP_PASS;
-  const hasSMTPHost = !!process.env.SMTP_HOST;
   
   console.log('\n📧 Email Configuration Status:');
-  if (hasSMTPUser && hasSMTPPass) {
+  
+  if (hasResendKey) {
+    console.log('✅ Resend API configured (RECOMMENDED for Render.com)');
+    console.log(`   Resend From: ${process.env.RESEND_FROM_EMAIL || 'onboarding@resend.dev (default)'}`);
+    console.log(`   Owner Email: ${OWNER_EMAIL}`);
+    console.log('✅ Email notifications are ENABLED via Resend API\n');
+  } else if (hasSMTPUser && hasSMTPPass) {
     const port = parseInt(process.env.SMTP_PORT || '587', 10);
     const secure = process.env.SMTP_SECURE === 'true' || port === 465;
     
@@ -81,24 +87,27 @@ const checkSMTPConfig = () => {
     console.log(`   SMTP Port: ${port} (${secure ? 'SSL' : 'TLS'})`);
     console.log(`   SMTP User: ${process.env.SMTP_USER}`);
     console.log(`   Owner Email: ${OWNER_EMAIL}`);
-    console.log('✅ Email notifications are ENABLED');
+    console.log('✅ Email notifications are ENABLED via SMTP');
     console.log('   Connection timeout: 60s, Socket timeout: 60s');
     if (port === 587) {
-      console.log('   💡 Tip: If you experience connection timeouts, try port 465 with SMTP_SECURE=true\n');
+      console.log('   ⚠️  WARNING: Port 587 may be blocked on Render.com');
+      console.log('   💡 RECOMMENDED: Switch to Resend API or use port 465 with SMTP_SECURE=true\n');
     } else {
       console.log('');
     }
   } else {
-    console.log('⚠️  SMTP credentials NOT configured');
+    console.log('⚠️  No email service configured');
+    console.log('   RESEND_API_KEY:', hasResendKey ? '✅ Set' : '❌ Missing (RECOMMENDED)');
     console.log('   SMTP_USER:', hasSMTPUser ? '✅ Set' : '❌ Missing');
     console.log('   SMTP_PASS:', hasSMTPPass ? '✅ Set' : '❌ Missing');
     console.log('⚠️  Email notifications are DISABLED');
-    console.log('   Contact form submissions will be saved to MongoDB but no emails will be sent\n');
+    console.log('   Contact form submissions will be saved to MongoDB but no emails will be sent');
+    console.log('   💡 To enable emails: Add RESEND_API_KEY (recommended) or SMTP credentials\n');
   }
 };
 
-// Check SMTP configuration on startup
-checkSMTPConfig();
+// Check Email configuration on startup
+checkEmailConfig();
 
 // Contact Form Submission Endpoint
 app.post('/api/contact', validateContactForm, async (req, res) => {
@@ -252,56 +261,105 @@ ${message}
 Submitted at: ${new Date(savedForm.submittedAt).toLocaleString()}
     `;
 
-    // Send email to owner (if SMTP credentials are configured)
-    const transporter = createTransporter();
+    // Send email to owner
     let emailSent = false;
-    let emailError = null;
     
-    if (transporter) {
+    // Try Resend API first (more reliable on Render.com)
+    if (process.env.RESEND_API_KEY) {
       try {
-        // Send email directly (skip verification to avoid timeout)
-        const info = await transporter.sendMail({
-          from: `"Website Contact Form" <${process.env.SMTP_USER}>`,
-          to: OWNER_EMAIL,
-          replyTo: email,
-          subject: emailSubject,
-          text: emailText,
-          html: emailHtml
+        const resendResponse = await fetch('https://api.resend.com/emails', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${process.env.RESEND_API_KEY}`
+          },
+          body: JSON.stringify({
+            from: process.env.RESEND_FROM_EMAIL || 'Website Contact Form <onboarding@resend.dev>',
+            to: [OWNER_EMAIL],
+            reply_to: email,
+            subject: emailSubject,
+            html: emailHtml,
+            text: emailText
+          })
         });
-        
-        emailSent = true;
-        console.log('\n✅ Email notification sent successfully');
-        console.log(`   Message ID: ${info.messageId}`);
-        console.log(`   From: ${process.env.SMTP_USER}`);
-        console.log(`   To: ${OWNER_EMAIL}`);
-        console.log(`   Subject: ${emailSubject}\n`);
-      } catch (err) {
-        emailError = err;
-        // Log email error but don't fail the request since data is already saved
-        console.error('\n❌ EMAIL SENDING FAILED:');
-        console.error('   Error:', err.message);
-        console.error('   Code:', err.code || 'N/A');
-        console.error('   Command:', err.command || 'N/A');
-        if (err.response) {
-          console.error('   Response:', err.response);
+
+        if (resendResponse.ok) {
+          const resendData = await resendResponse.json();
+          console.log('\n✅ Email notification sent successfully via Resend');
+          console.log(`   From: ${process.env.RESEND_FROM_EMAIL || 'onboarding@resend.dev'}`);
+          console.log(`   To: ${OWNER_EMAIL}`);
+          console.log(`   Subject: ${emailSubject}`);
+          console.log(`   Resend ID: ${resendData.id}\n`);
+          emailSent = true;
+        } else {
+          const errorData = await resendResponse.json();
+          throw new Error(`Resend API error: ${errorData.message || resendResponse.statusText}`);
         }
-        console.error('   Full error:', err);
-        console.error('✅ Contact form data saved to MongoDB successfully');
-        console.error('⚠️  But email notification failed - check your SMTP configuration\n');
-        
-        // If connection timeout, suggest alternatives
-        if (err.code === 'ETIMEDOUT' || err.code === 'ECONNECTION') {
-          console.error('💡 SUGGESTION: Render.com is blocking SMTP connections on port 587.');
-          console.error('   QUICK FIX: Update Render.com environment variables:');
-          console.error('     - SMTP_PORT: 465');
-          console.error('     - SMTP_SECURE: true');
-          console.error('   Then restart your backend service.\n');
-        }
+      } catch (resendError) {
+        console.error('\n❌ Resend API email sending failed:');
+        console.error('   Error:', resendError.message);
+        console.error('   Falling back to SMTP...\n');
       }
-    } else {
-      console.warn('⚠️  SMTP credentials not configured. Email notification skipped.');
-      console.warn('⚠️  To enable email notifications, add SMTP_USER and SMTP_PASS to your .env file');
-      console.log('✅ Contact form data saved to MongoDB successfully');
+    }
+    
+    // Fallback to SMTP if Resend failed or not configured
+    if (!emailSent) {
+      const transporter = createTransporter();
+      
+      if (transporter) {
+        try {
+          const info = await transporter.sendMail({
+            from: `"Website Contact Form" <${process.env.SMTP_USER}>`,
+            to: OWNER_EMAIL,
+            replyTo: email,
+            subject: emailSubject,
+            text: emailText,
+            html: emailHtml
+          });
+          
+          console.log('\n✅ Email notification sent successfully via SMTP');
+          console.log(`   Message ID: ${info.messageId}`);
+          console.log(`   From: ${process.env.SMTP_USER}`);
+          console.log(`   To: ${OWNER_EMAIL}`);
+          console.log(`   Subject: ${emailSubject}\n`);
+          emailSent = true;
+        } catch (err) {
+          // Log email error but don't fail the request since data is already saved
+          console.error('\n❌ EMAIL SENDING FAILED:');
+          console.error('   Error:', err.message);
+          console.error('   Code:', err.code || 'N/A');
+          console.error('   Command:', err.command || 'N/A');
+          if (err.response) {
+            console.error('   Response:', err.response);
+          }
+          console.error('   Full error:', err);
+          console.error('✅ Contact form data saved to MongoDB successfully');
+          console.error('⚠️  But email notification failed - check your SMTP configuration');
+          
+          // If connection timeout, suggest alternatives
+          if (err.code === 'ETIMEDOUT' || err.code === 'ECONNECTION') {
+            console.error('💡 SUGGESTION: Render.com is blocking SMTP connections.');
+            console.error('   RECOMMENDED FIX: Use Resend API instead (more reliable on cloud platforms)');
+            console.error('   1. Sign up at https://resend.com (free tier available)');
+            console.error('   2. Get your API key from Resend dashboard');
+            console.error('   3. Add to Render.com environment variables:');
+            console.error('      - RESEND_API_KEY: re_your-api-key-here');
+            console.error('      - RESEND_FROM_EMAIL: your-verified-email@yourdomain.com (optional)');
+            console.error('   4. Restart your backend service\n');
+            console.error('   ALTERNATIVE: Try port 465 with SSL:');
+            console.error('     - SMTP_PORT: 465');
+            console.error('     - SMTP_SECURE: true\n');
+          } else {
+            console.error('');
+          }
+        }
+      } else {
+        console.warn('⚠️  No email service configured. Email notification skipped.');
+        console.warn('⚠️  To enable email notifications:');
+        console.warn('   Option 1: Add RESEND_API_KEY (RECOMMENDED for Render.com)');
+        console.warn('   Option 2: Add SMTP_USER and SMTP_PASS');
+        console.log('✅ Contact form data saved to MongoDB successfully');
+      }
     }
 
     res.status(200).json({
@@ -310,11 +368,7 @@ Submitted at: ${new Date(savedForm.submittedAt).toLocaleString()}
       data: {
         id: savedForm._id,
         submittedAt: savedForm.submittedAt,
-        emailSent: emailSent,
-        emailError: emailError ? {
-          message: emailError.message,
-          code: emailError.code
-        } : null
+        emailSent: emailSent
       }
     });
 
@@ -355,19 +409,64 @@ app.get('/api/health', (req, res) => {
 
 // Test email endpoint (for debugging)
 app.post('/api/test-email', async (req, res) => {
+  let emailSent = false;
+  let errorDetails = null;
+  
+  // Try Resend API first
+  if (process.env.RESEND_API_KEY) {
+    try {
+      const resendResponse = await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${process.env.RESEND_API_KEY}`
+        },
+        body: JSON.stringify({
+          from: process.env.RESEND_FROM_EMAIL || 'Website Contact Form <onboarding@resend.dev>',
+          to: [OWNER_EMAIL],
+          subject: 'Test Email from Contact Form',
+          html: '<p>This is a <strong>test email</strong> to verify email configuration.</p>',
+          text: 'This is a test email to verify email configuration.'
+        })
+      });
+
+      if (resendResponse.ok) {
+        const resendData = await resendResponse.json();
+        return res.json({
+          success: true,
+          message: 'Test email sent successfully via Resend',
+          details: {
+            from: process.env.RESEND_FROM_EMAIL || 'onboarding@resend.dev',
+            to: OWNER_EMAIL,
+            resendId: resendData.id
+          }
+        });
+      } else {
+        const errorData = await resendResponse.json();
+        errorDetails = { message: errorData.message, via: 'Resend API' };
+      }
+    } catch (error) {
+      errorDetails = { message: error.message, via: 'Resend API' };
+    }
+  }
+  
+  // Fallback to SMTP
   const transporter = createTransporter();
   
   if (!transporter) {
     return res.status(400).json({
       success: false,
-      message: 'SMTP credentials not configured',
+      message: 'No email service configured',
       details: {
+        RESEND_API_KEY: process.env.RESEND_API_KEY ? 'Set' : 'Missing (RECOMMENDED)',
         SMTP_USER: process.env.SMTP_USER ? 'Set' : 'Missing',
         SMTP_PASS: process.env.SMTP_PASS ? 'Set' : 'Missing',
         SMTP_HOST: process.env.SMTP_HOST || 'smtp.gmail.com (default)',
         SMTP_PORT: process.env.SMTP_PORT || '587 (default)',
         OWNER_EMAIL: OWNER_EMAIL
-      }
+      },
+      suggestion: 'Add RESEND_API_KEY (recommended) or SMTP credentials to enable email notifications',
+      previousError: errorDetails
     });
   }
 
@@ -382,24 +481,28 @@ app.post('/api/test-email', async (req, res) => {
 
     await transporter.sendMail(testEmail);
     
-    res.json({
+    return res.json({
       success: true,
-      message: 'Test email sent successfully',
+      message: 'Test email sent successfully via SMTP',
       details: {
         from: process.env.SMTP_USER,
         to: OWNER_EMAIL
-      }
+      },
+      previousError: errorDetails
     });
   } catch (error) {
     console.error('Test email error:', error);
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: 'Failed to send test email',
       error: {
         message: error.message,
         code: error.code,
-        command: error.command
-      }
+        command: error.command,
+        via: 'SMTP'
+      },
+      previousError: errorDetails,
+      suggestion: 'Try using Resend API instead (add RESEND_API_KEY to environment variables)'
     });
   }
 });
