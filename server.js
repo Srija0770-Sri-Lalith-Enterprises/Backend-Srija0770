@@ -34,14 +34,32 @@ const createTransporter = () => {
     return null; // Return null if credentials are missing
   }
   
+  const port = parseInt(process.env.SMTP_PORT || '587', 10);
+  const secure = process.env.SMTP_SECURE === 'true' || port === 465;
+  
   return nodemailer.createTransport({
     host: process.env.SMTP_HOST || 'smtp.gmail.com',
-    port: process.env.SMTP_PORT || 587,
-    secure: process.env.SMTP_SECURE === 'true', // true for 465, false for other ports
+    port: port,
+    secure: secure, // true for 465, false for other ports
     auth: {
       user: process.env.SMTP_USER,
       pass: process.env.SMTP_PASS
-    }
+    },
+    // Connection timeout settings
+    connectionTimeout: 60000, // 60 seconds
+    greetingTimeout: 30000, // 30 seconds
+    socketTimeout: 60000, // 60 seconds
+    // TLS/SSL options for better compatibility
+    tls: {
+      rejectUnauthorized: false, // Accept self-signed certificates
+      minVersion: 'TLSv1.2'
+    },
+    // Retry configuration
+    pool: true,
+    maxConnections: 1,
+    maxMessages: 3,
+    rateDelta: 1000,
+    rateLimit: 5
   });
 };
 
@@ -56,12 +74,21 @@ const checkSMTPConfig = () => {
   
   console.log('\n📧 Email Configuration Status:');
   if (hasSMTPUser && hasSMTPPass) {
+    const port = parseInt(process.env.SMTP_PORT || '587', 10);
+    const secure = process.env.SMTP_SECURE === 'true' || port === 465;
+    
     console.log('✅ SMTP credentials found');
     console.log(`   SMTP Host: ${process.env.SMTP_HOST || 'smtp.gmail.com (default)'}`);
-    console.log(`   SMTP Port: ${process.env.SMTP_PORT || '587 (default)'}`);
+    console.log(`   SMTP Port: ${port} (${secure ? 'SSL' : 'TLS'})`);
     console.log(`   SMTP User: ${process.env.SMTP_USER}`);
     console.log(`   Owner Email: ${OWNER_EMAIL}`);
-    console.log('✅ Email notifications are ENABLED\n');
+    console.log('✅ Email notifications are ENABLED');
+    console.log('   Connection timeout: 60s, Socket timeout: 60s');
+    if (port === 587) {
+      console.log('   💡 Tip: If you experience connection timeouts, try port 465 with SMTP_SECURE=true\n');
+    } else {
+      console.log('');
+    }
   } else {
     console.log('⚠️  SMTP credentials NOT configured');
     console.log('   SMTP_USER:', hasSMTPUser ? '✅ Set' : '❌ Missing');
