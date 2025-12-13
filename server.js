@@ -54,12 +54,11 @@ const createTransporter = () => {
       rejectUnauthorized: false, // Accept self-signed certificates
       minVersion: 'TLSv1.2'
     },
-    // Retry configuration
-    pool: true,
+    // Connection settings for cloud platforms
+    pool: false, // Disable connection pooling to avoid timeout issues
+    // Disable rate limiting for immediate sends
     maxConnections: 1,
-    maxMessages: 3,
-    rateDelta: 1000,
-    rateLimit: 5
+    maxMessages: 1
   });
 };
 
@@ -255,10 +254,13 @@ Submitted at: ${new Date(savedForm.submittedAt).toLocaleString()}
 
     // Send email to owner (if SMTP credentials are configured)
     const transporter = createTransporter();
+    let emailSent = false;
+    let emailError = null;
     
     if (transporter) {
       try {
-        await transporter.sendMail({
+        // Send email directly (skip verification to avoid timeout)
+        const info = await transporter.sendMail({
           from: `"Website Contact Form" <${process.env.SMTP_USER}>`,
           to: OWNER_EMAIL,
           replyTo: email,
@@ -266,22 +268,35 @@ Submitted at: ${new Date(savedForm.submittedAt).toLocaleString()}
           text: emailText,
           html: emailHtml
         });
+        
+        emailSent = true;
         console.log('\n✅ Email notification sent successfully');
+        console.log(`   Message ID: ${info.messageId}`);
         console.log(`   From: ${process.env.SMTP_USER}`);
         console.log(`   To: ${OWNER_EMAIL}`);
         console.log(`   Subject: ${emailSubject}\n`);
-      } catch (emailError) {
+      } catch (err) {
+        emailError = err;
         // Log email error but don't fail the request since data is already saved
         console.error('\n❌ EMAIL SENDING FAILED:');
-        console.error('   Error:', emailError.message);
-        console.error('   Code:', emailError.code || 'N/A');
-        console.error('   Command:', emailError.command || 'N/A');
-        if (emailError.response) {
-          console.error('   Response:', emailError.response);
+        console.error('   Error:', err.message);
+        console.error('   Code:', err.code || 'N/A');
+        console.error('   Command:', err.command || 'N/A');
+        if (err.response) {
+          console.error('   Response:', err.response);
         }
-        console.error('   Full error:', emailError);
+        console.error('   Full error:', err);
         console.error('✅ Contact form data saved to MongoDB successfully');
         console.error('⚠️  But email notification failed - check your SMTP configuration\n');
+        
+        // If connection timeout, suggest alternatives
+        if (err.code === 'ETIMEDOUT' || err.code === 'ECONNECTION') {
+          console.error('💡 SUGGESTION: Render.com is blocking SMTP connections on port 587.');
+          console.error('   QUICK FIX: Update Render.com environment variables:');
+          console.error('     - SMTP_PORT: 465');
+          console.error('     - SMTP_SECURE: true');
+          console.error('   Then restart your backend service.\n');
+        }
       }
     } else {
       console.warn('⚠️  SMTP credentials not configured. Email notification skipped.');
@@ -294,7 +309,12 @@ Submitted at: ${new Date(savedForm.submittedAt).toLocaleString()}
       message: 'Contact form submitted successfully. We will get back to you soon!',
       data: {
         id: savedForm._id,
-        submittedAt: savedForm.submittedAt
+        submittedAt: savedForm.submittedAt,
+        emailSent: emailSent,
+        emailError: emailError ? {
+          message: emailError.message,
+          code: emailError.code
+        } : null
       }
     });
 
