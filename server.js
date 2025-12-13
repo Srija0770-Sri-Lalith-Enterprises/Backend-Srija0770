@@ -1,5 +1,7 @@
 import express from 'express';
 import cors from 'cors';
+import helmet from 'helmet';
+import rateLimit from 'express-rate-limit';
 import nodemailer from 'nodemailer';
 import dotenv from 'dotenv';
 import mongoose from 'mongoose';
@@ -11,9 +13,70 @@ dotenv.config();
 const port = process.env.PORT || 3001;
 const app = express();
 
-// Middleware
-app.use(cors());
-app.use(express.json());
+// Security: Helmet for security headers
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      styleSrc: ["'self'", "'unsafe-inline'"], // Allow inline styles for email templates
+      scriptSrc: ["'self'"],
+      imgSrc: ["'self'", "data:", "https:"],
+    },
+  },
+  crossOriginEmbedderPolicy: false, // Allow embedding if needed
+}));
+
+// Security: CORS - Restrict to specific origins
+const allowedOrigins = [
+  process.env.FRONTEND_URL || 'http://localhost:3000',
+  'https://sri-lalith-enterprises.vercel.app',
+  'https://sri-lalith-enterprises.netlify.app',
+  // Add your production frontend URL here
+];
+
+app.use(cors({
+  origin: function (origin, callback) {
+    // Allow requests with no origin (like mobile apps, Postman, or curl)
+    if (!origin) return callback(null, true);
+    
+    if (allowedOrigins.indexOf(origin) !== -1) {
+      callback(null, true);
+    } else {
+      // In production, reject unknown origins
+      if (process.env.NODE_ENV === 'production') {
+        callback(new Error('Not allowed by CORS'));
+      } else {
+        // In development, allow all origins
+        callback(null, true);
+      }
+    }
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+}));
+
+// Security: Rate limiting to prevent abuse
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100, // Limit each IP to 100 requests per windowMs
+  message: 'Too many requests from this IP, please try again later.',
+  standardHeaders: true, // Return rate limit info in the `RateLimit-*` headers
+  legacyHeaders: false, // Disable the `X-RateLimit-*` headers
+});
+
+// Apply rate limiting to all requests
+app.use('/api/', limiter);
+
+// More strict rate limiting for contact form
+const contactLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 5, // Limit each IP to 5 contact form submissions per 15 minutes
+  message: 'Too many contact form submissions. Please try again later.',
+  skipSuccessfulRequests: false,
+});
+
+app.use(express.json({ limit: '10mb' })); // Limit JSON payload size
 
 // MongoDB Connection
 const MONGODB_URI = process.env.MONGODB_URI;
@@ -51,7 +114,7 @@ const createTransporter = () => {
     socketTimeout: 60000, // 60 seconds
     // TLS/SSL options for better compatibility
     tls: {
-      rejectUnauthorized: false, // Accept self-signed certificates
+      rejectUnauthorized: process.env.NODE_ENV === 'production', // Reject unauthorized certs in production
       minVersion: 'TLSv1.2'
     },
     // Connection settings for cloud platforms
@@ -62,8 +125,12 @@ const createTransporter = () => {
   });
 };
 
-// Get owner email from environment variable
-const OWNER_EMAIL = process.env.OWNER_EMAIL || 'mundrusaisrija@gmail.com';
+// Get owner email from environment variable (required)
+const OWNER_EMAIL = process.env.OWNER_EMAIL;
+if (!OWNER_EMAIL) {
+  console.error('⚠️  WARNING: OWNER_EMAIL environment variable is not set!');
+  console.error('   Contact form emails will not be sent.');
+}
 
 // Check Email configuration on startup
 const checkEmailConfig = () => {
@@ -106,11 +173,29 @@ const checkEmailConfig = () => {
   }
 };
 
+// Security: HTML sanitization function to prevent XSS
+const sanitizeHtml = (str) => {
+  if (!str || typeof str !== 'string') return '';
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#x27;')
+    .replace(/\//g, '&#x2F;');
+};
+
+// Security: Escape HTML but preserve line breaks for email
+const escapeHtml = (str) => {
+  if (!str || typeof str !== 'string') return '';
+  return sanitizeHtml(str).replace(/\n/g, '<br>');
+};
+
 // Check Email configuration on startup
 checkEmailConfig();
 
-// Contact Form Submission Endpoint
-app.post('/api/contact', validateContactForm, async (req, res) => {
+// Contact Form Submission Endpoint (with rate limiting)
+app.post('/api/contact', contactLimiter, validateContactForm, async (req, res) => {
   try {
     const { name, email, phone, company, subject, message } = req.body;
     
@@ -130,8 +215,16 @@ app.post('/api/contact', validateContactForm, async (req, res) => {
 
     const savedForm = await contactForm.save();
 
+    // Security: Sanitize all user inputs before using in email
+    const sanitizedName = sanitizeHtml(name);
+    const sanitizedEmail = sanitizeHtml(email);
+    const sanitizedPhone = sanitizeHtml(phone);
+    const sanitizedCompany = company ? sanitizeHtml(company) : '';
+    const sanitizedSubject = sanitizeHtml(subject);
+    const sanitizedMessage = escapeHtml(message); // Preserve line breaks
+    
     // Prepare email content
-    const emailSubject = `New Contact Form Submission: ${subject}`;
+    const emailSubject = `New Contact Form Submission: ${sanitizedSubject}`;
     
     const emailHtml = `
       <!DOCTYPE html>
@@ -205,35 +298,35 @@ app.post('/api/contact', validateContactForm, async (req, res) => {
         <div class="content">
           <div class="field">
             <span class="label">Full Name:</span>
-            <span class="value">${name}</span>
+            <span class="value">${sanitizedName}</span>
           </div>
           
           <div class="field">
             <span class="label">Email Address:</span>
-            <span class="value">${email}</span>
+            <span class="value">${sanitizedEmail}</span>
           </div>
           
           <div class="field">
             <span class="label">Phone Number:</span>
-            <span class="value">${phone}</span>
+            <span class="value">${sanitizedPhone}</span>
           </div>
           
-          ${company ? `
+          ${sanitizedCompany ? `
           <div class="field">
             <span class="label">Company Name:</span>
-            <span class="value">${company}</span>
+            <span class="value">${sanitizedCompany}</span>
           </div>
           ` : ''}
           
           <div class="field">
             <span class="label">Subject:</span>
-            <span class="value">${subject}</span>
+            <span class="value">${sanitizedSubject}</span>
           </div>
           
           <div class="field">
             <span class="label">Message:</span>
             <div class="message-box">
-              ${message.replace(/\n/g, '<br>')}
+              ${sanitizedMessage}
             </div>
           </div>
           
@@ -249,10 +342,10 @@ app.post('/api/contact', validateContactForm, async (req, res) => {
     const emailText = `
 New Contact Form Submission
 
-Full Name: ${name}
-Email Address: ${email}
-Phone Number: ${phone}
-${company ? `Company Name: ${company}\n` : ''}Subject: ${subject}
+Full Name: ${sanitizedName}
+Email Address: ${sanitizedEmail}
+Phone Number: ${sanitizedPhone}
+${sanitizedCompany ? `Company Name: ${sanitizedCompany}\n` : ''}Subject: ${sanitizedSubject}
 
 Message:
 ${message}
@@ -261,11 +354,14 @@ ${message}
 Submitted at: ${new Date(savedForm.submittedAt).toLocaleString()}
     `;
 
-    // Send email to owner
+    // Send email to owner (only if OWNER_EMAIL is configured)
     let emailSent = false;
     
-    // Try Resend API first (more reliable on Render.com)
-    if (process.env.RESEND_API_KEY) {
+    if (!OWNER_EMAIL) {
+      console.warn('⚠️  OWNER_EMAIL not configured. Skipping email notification.');
+    } else {
+      // Try Resend API first (more reliable on Render.com)
+      if (process.env.RESEND_API_KEY) {
       try {
         const resendResponse = await fetch('https://api.resend.com/emails', {
           method: 'POST',
@@ -361,6 +457,7 @@ Submitted at: ${new Date(savedForm.submittedAt).toLocaleString()}
         console.log('✅ Contact form data saved to MongoDB successfully');
       }
     }
+    }
 
     res.status(200).json({
       success: true,
@@ -407,8 +504,15 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-// Test email endpoint (for debugging)
+// Test email endpoint (for debugging) - Protected in production
 app.post('/api/test-email', async (req, res) => {
+  // Security: Disable test endpoint in production
+  if (process.env.NODE_ENV === 'production') {
+    return res.status(403).json({
+      success: false,
+      message: 'Test endpoint is disabled in production for security reasons'
+    });
+  }
   let emailSent = false;
   let errorDetails = null;
   
