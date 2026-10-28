@@ -1,8 +1,51 @@
+# Sri Lalith Enterprises Backend
+
+Backend API for the Sri Lalith Enterprises website, built using Node.js and Express.
+
+## Live Backend
+- Backend API: https://backend-srija0770-sri-lalith-enterprises.onrender.com/
+- 
+## Project Overview
+This backend handles business contact form submissions, stores them in MongoDB, validates incoming data, and sends email notifications to the business owner. It is built to support the main frontend website securely and efficiently.
+
+## Features
+- Contact form submission API
+- MongoDB integration
+- Input validation and sanitization
+- Email sending via Nodemailer
+- Health check endpoint
+- Security middleware with Helmet and CORS
+- Rate limiting
+- Error handling
+
+## Tech Stack
+- Node.js
+- Express
+- MongoDB
+- Mongoose
+- Nodemailer
+- Helmet
+- CORS
+- Express Rate Limit
+- dotenv
+
+## Project Structure
+```bash
+Backend-Srija0770/
+├── server.js
+├── validation.js
+├── ContactFormSchema.js
+├── package.json
+├── .env
+├── .gitignore
+├── README.md
+└── package-lock.json
+
 # Backend Setup Instructions
 
 ## Prerequisites
-- Node.js (v14 or higher)
-- MongoDB (local installation or MongoDB Atlas account)
+- Node.js (version 18 or higher)
+- MongoDB database (local installation or MongoDB Atlas account)
 
 ## Installation
 
@@ -11,12 +54,17 @@
 npm install
 ```
 
-2. Create a `.env` file in the Backend directory:
-```bash
-# Create .env file manually or use:
-touch .env
+2. Create a `.env` file in the Backend directory with:
 ```
-
+PORT=3001
+MONGODB_URI=your_mongodb_connection_string
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_SECURE=false
+SMTP_USER=your_email@gmail.com
+SMTP_PASS=your_app_password
+OWNER_EMAIL=your_email@gmail.com
+```
 **Important**: The `.env` file should be in the `Backend` directory (same level as `server.js`).
 
 3. Configure your `.env` file in the Backend directory with the following variables:
@@ -103,7 +151,7 @@ The server will start on `http://localhost:3001` (or the port specified in `.env
 ## API Endpoints
 
 ### POST `/api/contact`
-Submit contact form data.
+Submit contact form data (customer inquiries).
 
 **Request Body:**
 ```json
@@ -144,16 +192,15 @@ Health check endpoint.
 ## Validation
 
 The contact form validates:
-- **Full Name**: Must be at least 2 characters, not fake/test data
-- **Email Address**: Valid email format with real domain
-- **Phone Number**: Valid phone format (10-15 digits), not fake patterns
-- **Subject**: Must be at least 3 characters, meaningful content
-- **Message**: Must be at least 10 characters, meaningful content
+- Full name must be valid
+- Email must be valid
+- Phone number must be valid
+- Subject must be meaningful
+- Message must be at least 10 characters
 
 The system filters out common fake data patterns like "test", "demo", "fake", etc.
 
 ## Database
-
 Contact form submissions are stored in MongoDB with the following schema:
 - `name`: Full name
 - `email`: Email address
@@ -167,10 +214,15 @@ Contact form submissions are stored in MongoDB with the following schema:
 - `updatedAt`: Auto-generated timestamp
 
 ## Email Notifications
-
 When a contact form is submitted:
 1. Data is saved to MongoDB
 2. An email is sent to the owner email address (`OWNER_EMAIL`)
 3. The email includes all form fields in a structured HTML format
 4. The reply-to address is set to the submitter's email for easy response
 
+## Author
+- Project Owner: MUNDRU SAI SRIJA
+- GitHub: @Srija0770
+- Role: Project Owner and Developer
+## License
+This project is proprietary to Sri Lalith Enterprises.
